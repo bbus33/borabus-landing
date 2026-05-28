@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-display: Poppins, system-ui, sans-serif;
+  
+  --color-brand: #1E3A8A;
+  --color-brand-light: #2563EB;
+  --color-brand-dark: #1E293B;
+  --color-accent: #F59E0B;
+  --color-accent-light: #FCD34D;
+  --color-success: #10B981;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+}
