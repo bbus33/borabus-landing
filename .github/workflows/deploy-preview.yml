@@ -49,8 +49,16 @@ jobs:
         run: |
           aws s3 sync ./out "s3://${{ secrets.STAGING_S3_BUCKET }}/pr-${{ steps.pr-number.outputs.number }}" --delete
 
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.STAGING_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/pr-${{ steps.pr-number.outputs.number }}/*" \
+            --query 'Invalidation.Id' \
+            --output text
+
       - name: Preview URL
         run: |
           echo "## Preview Deployed" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 Preview: https://${{ secrets.STAGING_CLOUDFRONT_ID }}.cloudfront.net/pr-${{ steps.pr-number.outputs.number }}" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 Preview: ${{ secrets.STAGING_CLOUDFRONT_URL }}/pr-${{ steps.pr-number.outputs.number }}" >> $GITHUB_STEP_SUMMARY
