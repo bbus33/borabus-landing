@@ -35,9 +35,9 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL || 'http://localhost:3000' }}
 
-      - name: Upload build artifacts
+      - name: Upload static export
         uses: actions/upload-artifact@v4
         with:
-          name: next-build-output
-          path: .next/
+          name: static-export
+          path: out/
           retention-days: 7

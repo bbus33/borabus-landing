@@ -12,8 +12,6 @@ on:
 
 env:
   NODE_VERSION: '20'
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
   deploy:
@@ -46,44 +44,80 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
+      - name: Backup current deployment
+        id: backup
+        run: |
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          echo "backup_key=backups/$TIMESTAMP" >> $GITHUB_OUTPUT
+          aws s3 sync "s3://${{ secrets.PROD_S3_BUCKET }}" "s3://${{ secrets.PROD_S3_BUCKET }}/backups/$TIMESTAMP" 2>/dev/null || true
+          echo "Backup saved to backups/$TIMESTAMP"
+
       - name: Deploy to S3
+        id: deploy
         run: |
           aws s3 sync ./out "s3://${{ secrets.PROD_S3_BUCKET }}" --delete
 
       - name: Invalidate CloudFront cache
+        id: invalidate
         run: |
-          aws cloudfront create-invalidation \
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
             --distribution-id ${{ secrets.PROD_CLOUDFRONT_DISTRIBUTION_ID }} \
             --paths "/*" \
             --query 'Invalidation.Id' \
-            --output text
+            --output text)
+          echo "invalidation_id=$INVALIDATION_ID" >> $GITHUB_OUTPUT
+          echo "Waiting for CloudFront invalidation $INVALIDATION_ID..."
+          aws cloudfront wait invalidation-completed \
+            --distribution-id ${{ secrets.PROD_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --id "$INVALIDATION_ID" || true
 
       - name: Health check
+        id: health-check
         run: |
-          echo "Production deployment complete"
-          echo "URL: ${{ secrets.PROD_CLOUDFRONT_URL }}"
+          sleep 5
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.PROD_CLOUDFRONT_URL }}" 2>/dev/null || echo "000")
+          echo "http_status=$HTTP_STATUS" >> $GITHUB_OUTPUT
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "Health check passed (HTTP $HTTP_STATUS)"
+          else
+            echo "Health check FAILED (HTTP $HTTP_STATUS)"
+            echo "health_check_failed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Rollback on failure
+        if: failure() || steps.health-check.outputs.health_check_failed == 'true'
+        run: |
+          echo "Rolling back to previous deployment..."
+          aws s3 sync "s3://${{ secrets.PROD_S3_BUCKET }}/${{ steps.backup.outputs.backup_key }}" "s3://${{ secrets.PROD_S3_BUCKET }}" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.PROD_CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*" > /dev/null 2>&1
+          echo "## Rollback executed" >> $GITHUB_STEP_SUMMARY
+          echo "Rolled back to backup: ${{ steps.backup.outputs.backup_key }}" >> $GITHUB_STEP_SUMMARY
+          exit 1
 
       - name: Notify status
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
             {
-              echo "## Deploy Produção ✅"
+              echo "## Deploy Producao OK"
               echo ""
-              echo "Motivo: ${{ github.event.inputs.reason || 'Deploy automático (main)' }}"
+              echo "Motivo: ${{ github.event.inputs.reason || 'Deploy automatico (main)' }}"
               echo ""
               echo "Branch: \`main\`"
               echo "Commit: ${{ github.sha }}"
               echo "URL: ${{ secrets.PROD_CLOUDFRONT_URL }}"
+              echo "Backup: ${{ steps.backup.outputs.backup_key }}"
             } >> $GITHUB_STEP_SUMMARY
           else
             {
-              echo "## Deploy Produção ❌"
-              echo ""
-              echo "Falha no deploy para produção."
+              echo "## Deploy Producao FAILED"
               echo ""
               echo "Branch: \`main\`"
               echo "Commit: ${{ github.sha }}"
+              echo ""
+              echo "Rollback path: restore from s3://${{ secrets.PROD_S3_BUCKET }}/${{ steps.backup.outputs.backup_key }}"
             } >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
